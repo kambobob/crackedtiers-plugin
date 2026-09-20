@@ -1,0 +1,14 @@
+name: TierDisplay
+version: '${project.version}'
+main: com.tierdisplay.TierDisplay
+api-version: '1.13'
+description: Shows a player's tier from a website in tab and above their head.
+commands:
+  tierdisplay:
+    description: Manage TierDisplay
+    usage: /tierdisplay <reload|refresh [player]>
+    permission: tierdisplay.admin
+permissions:
+  tierdisplay.admin:
+    description: Allows use of /tierdisplay
+    default: op
