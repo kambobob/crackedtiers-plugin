@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------
+# TierDisplay config
+# ---------------------------------------------------------------
+
+api:
+  base-url: "https://crackedtiers.webhook.marauder.live"
+
+  # Leaderboard endpoint (the plugin adds ?limit=..&offset=.. itself).
+  # Used to match Minecraft names to Discord IDs.
+  overview-path: "/api/overview"
+
+  # Per-player endpoint, {id} = Discord ID
+  player-path: "/api/player/{id}"
+
+  # How many leaderboard rows to ask for per page
+  page-size: 100
+
+  # Optional API key. Leave key empty to send no header.
+  key: ""
+  key-header: "Authorization"
+
+  timeout-seconds: 5
+
+# How often (minutes) to re-download the leaderboard and re-check everyone online.
+# Players are also fetched instantly when they join.
+refresh-minutes: 5
+
+# What gets shown in front of the player's name.
+# {color} = colour from tier-colors below, {tier} = the tier text.
+format: "&8[{color}{tier}&8] &r"
+
+# Shown for players with no tier. Leave "" to show nothing.
+unranked-format: ""
+
+# Colour per tier (case-insensitive). Anything not listed uses "default".
+tier-colors:
+  default: "&f"
+  HT1: "&6"
+  LT1: "&e"
+  HT2: "&d"
+  LT2: "&5"
+  HT3: "&b"
+  LT3: "&3"
+  HT4: "&a"
+  LT4: "&2"
+  HT5: "&7"
+  LT5: "&8"
