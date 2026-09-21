@@ -49,6 +49,7 @@ import java.util.function.Consumer;
  * Paper / Spigot (1.12+): scoreboard team prefix -> tab list AND above the head.
  * Folia: the scoreboard API is unsupported there, so only the tab list name is set,
  *        using each player's entity scheduler.
+ * Optional: PlaceholderAPI placeholders for use in other plugins' configs.
  *
  * Web requests run on the plugin's own threads, so the Bukkit scheduler is never
  * touched off the main thread (it does not exist on Folia).
@@ -57,6 +58,9 @@ public class TierDisplay extends JavaPlugin implements Listener {
 
     /** Online players, kept by join/quit events so other threads never call Bukkit for them. */
     private final Map<UUID, Player> online = new ConcurrentHashMap<UUID, Player>();
+
+    /** Latest best tier per online player (absent = unranked). Read by the placeholders. */
+    private final Map<UUID, String> tiers = new ConcurrentHashMap<UUID, String>();
 
     /** Lower-case Minecraft name -> Discord ID, built from the website's leaderboard. */
     private volatile Map<String, String> idsByName = new HashMap<String, String>();
@@ -98,6 +102,7 @@ public class TierDisplay extends JavaPlugin implements Listener {
         });
 
         getServer().getPluginManager().registerEvents(this, this);
+        hookPlaceholders();
         for (Player p : Bukkit.getOnlinePlayers()) online.put(p.getUniqueId(), p);
 
         startTimer();
@@ -117,6 +122,18 @@ public class TierDisplay extends JavaPlugin implements Listener {
             }
         }
         online.clear();
+        tiers.clear();
+    }
+
+    private void hookPlaceholders() {
+        if (getServer().getPluginManager().getPlugin("PlaceholderAPI") == null) return;
+        try {
+            new TierExpansion(this).register();
+            getLogger().info("Registered PlaceholderAPI placeholders: %tierdisplay_tier%, "
+                    + "%tierdisplay_prefix%, %tierdisplay_prefix_legacy%");
+        } catch (Throwable t) {
+            getLogger().warning("Could not register PlaceholderAPI placeholders: " + t);
+        }
     }
 
     private void startTimer() {
@@ -128,6 +145,30 @@ public class TierDisplay extends JavaPlugin implements Listener {
                 refreshPlayers(new ArrayList<Player>(online.values()));
             }
         }, minutes, minutes, TimeUnit.MINUTES);
+    }
+
+    // ------------------------------------------------------------------
+    // Used by the PlaceholderAPI expansion
+    // ------------------------------------------------------------------
+
+    /** The player's best tier, or null if unranked / not fetched yet. */
+    public String getTier(UUID id) {
+        return tiers.get(id);
+    }
+
+    /** The formatted prefix with & colour codes (empty if nothing should be shown). */
+    public String rawPrefix(String tier) {
+        FileConfiguration cfg = getConfig();
+        String format = tier == null
+                ? cfg.getString("unranked-format", "")
+                : cfg.getString("format", "&8[{color}{tier}&8] &r");
+        if (format == null || format.isEmpty()) return "";
+
+        String color = tier == null
+                ? "&f"
+                : cfg.getString("tier-colors." + tier.toUpperCase(), cfg.getString("tier-colors.default", "&f"));
+
+        return format.replace("{color}", color).replace("{tier}", tier == null ? "" : tier);
     }
 
     // ------------------------------------------------------------------
@@ -145,6 +186,7 @@ public class TierDisplay extends JavaPlugin implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         Player p = event.getPlayer();
         online.remove(p.getUniqueId());
+        tiers.remove(p.getUniqueId());
         if (!folia) removeTeam(p); // Paper: main thread. On Folia the tab entry leaves with the player.
     }
 
@@ -254,8 +296,8 @@ public class TierDisplay extends JavaPlugin implements Listener {
 
     private void loadIndex() throws Exception {
         FileConfiguration cfg = getConfig();
-        String overviewUrl = baseUrl() + cfg.getString("api.overview-path", "/api/overview");
-        int pageSize = Math.max(1, cfg.getInt("api.page-size", 100));
+        String overviewUrl = baseUrl() + cfg.getString("api.overview-path", "/api/leaderboard/overview");
+        int pageSize = Math.max(1, cfg.getInt("api.page-size", 25));
 
         Map<String, String> map = new HashMap<String, String>();
         int offset = 0;
@@ -371,22 +413,21 @@ public class TierDisplay extends JavaPlugin implements Listener {
     // ------------------------------------------------------------------
 
     private String buildPrefix(String tier) {
-        FileConfiguration cfg = getConfig();
-        String format = tier == null
-                ? cfg.getString("unranked-format", "")
-                : cfg.getString("format", "&8[{color}{tier}&8] &r");
-        if (format == null || format.isEmpty()) return "";
-
-        String color = tier == null
-                ? "&f"
-                : cfg.getString("tier-colors." + tier.toUpperCase(), cfg.getString("tier-colors.default", "&f"));
-
-        return ChatColor.translateAlternateColorCodes('&',
-                format.replace("{color}", color).replace("{tier}", tier == null ? "" : tier));
+        return ChatColor.translateAlternateColorCodes('&', rawPrefix(tier));
     }
 
     /** Must run on the player's thread (main thread on Paper, entity scheduler on Folia). */
     private void apply(Player player, String tier) {
+        // Remember it for the placeholders, whatever display mode is used.
+        if (tier == null) tiers.remove(player.getUniqueId());
+        else tiers.put(player.getUniqueId(), tier);
+
+        if (!getConfig().getBoolean("direct-display", true)) {
+            // Placeholder-only mode: another plugin shows the tier, so don't touch names.
+            if (!folia) removeTeam(player);
+            return;
+        }
+
         String prefix = buildPrefix(tier);
 
         if (folia) {
