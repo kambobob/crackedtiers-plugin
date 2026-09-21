@@ -7,13 +7,13 @@ api:
 
   # Leaderboard endpoint (the plugin adds ?limit=..&offset=.. itself).
   # Used to match Minecraft names to Discord IDs.
-  overview-path: "/api/overview"
+  overview-path: "/api/leaderboard/overview"
 
   # Per-player endpoint, {id} = Discord ID
   player-path: "/api/player/{id}"
 
   # How many leaderboard rows to ask for per page
-  page-size: 100
+  page-size: 25
 
   # Optional API key. Leave key empty to send no header.
   key: ""
@@ -24,6 +24,16 @@ api:
 # How often (minutes) to re-download the leaderboard and re-check everyone online.
 # Players are also fetched instantly when they join.
 refresh-minutes: 5
+
+# true  = TierDisplay puts the tier in front of the name itself
+#         (team prefix on Paper: tab + above head; tab name on Folia).
+# false = TierDisplay only provides the PlaceholderAPI placeholders and touches
+#         nothing else. Use this when another plugin (SimpleScore, a tab plugin,
+#         etc.) controls names and you add the placeholders to ITS config:
+#           %tierdisplay_tier%           -> HT1
+#           %tierdisplay_prefix%         -> &8[&6HT1&8] &r   (with & colour codes)
+#           %tierdisplay_prefix_legacy%  -> same, with section-sign colour codes
+direct-display: true
 
 # What gets shown in front of the player's name.
 # {color} = colour from tier-colors below, {tier} = the tier text.
