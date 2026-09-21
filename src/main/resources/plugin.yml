@@ -2,6 +2,8 @@ name: TierDisplay
 version: '${project.version}'
 main: com.tierdisplay.TierDisplay
 api-version: '1.13'
+folia-supported: true
+softdepend: [PlaceholderAPI]
 description: Shows a player's tier from a website in tab and above their head.
 commands:
   tierdisplay:
