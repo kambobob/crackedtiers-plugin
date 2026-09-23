@@ -25,22 +25,30 @@ api:
 # Players are also fetched instantly when they join.
 refresh-minutes: 5
 
-# true  = TierDisplay puts the tier in front of the name itself
-#         (team prefix on Paper: tab + above head; tab name on Folia).
+# true  = TierDisplay puts the tier on the name itself
+#         (team prefix/suffix on Paper: tab + above head; tab name on Folia).
 # false = TierDisplay only provides the PlaceholderAPI placeholders and touches
 #         nothing else. Use this when another plugin (SimpleScore, a tab plugin,
 #         etc.) controls names and you add the placeholders to ITS config:
-#           %tierdisplay_tier%           -> HT1
-#           %tierdisplay_prefix%         -> &8[&6HT1&8] &r   (with & colour codes)
-#           %tierdisplay_prefix_legacy%  -> same, with section-sign colour codes
-direct-display: true
+#           %tierdisplay_tier%              -> HT1
+#           %tierdisplay_kit%               -> Mace
+#           %tierdisplay_prefix%            -> "&8[&6HT1&8] &r"  (& colour codes)
+#           %tierdisplay_prefix_legacy%     -> same, section-sign colour codes
+#           %tierdisplay_prefix_mm%         -> same, as MiniMessage tags
+#           %tierdisplay_suffix%            -> " &6HT1 &7Mace"   (& colour codes)
+#           %tierdisplay_suffix_legacy%     -> same, section-sign colour codes
+#           %tierdisplay_suffix_mm%         -> same, as MiniMessage tags
+direct-display: false
 
-# What gets shown in front of the player's name.
+# --- Shown BEFORE the name ---
 # {color} = colour from tier-colors below, {tier} = the tier text.
 format: "&8[{color}{tier}&8] &r"
-
-# Shown for players with no tier. Leave "" to show nothing.
 unranked-format: ""
+
+# --- Shown AFTER the name ---
+# {color} = colour from tier-colors below, {tier} = the tier text, {kit} = kit name.
+suffix-format: " {color}{tier} &7{kit}"
+unranked-suffix-format: ""
 
 # Colour per tier (case-insensitive). Anything not listed uses "default".
 tier-colors:
