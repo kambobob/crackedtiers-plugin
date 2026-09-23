@@ -44,9 +44,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
- * Shows a player's best tier (fetched from the Cracked Tiers website) in front of their name.
+ * Shows a player's best tier + kit (fetched from the Cracked Tiers website) around their name.
  *
- * Paper / Spigot (1.12+): scoreboard team prefix -> tab list AND above the head.
+ * Paper / Spigot (1.12+): scoreboard team prefix/suffix -> tab list AND above the head.
  * Folia: the scoreboard API is unsupported there, so only the tab list name is set,
  *        using each player's entity scheduler.
  * Optional: PlaceholderAPI placeholders for use in other plugins' configs.
@@ -56,11 +56,22 @@ import java.util.function.Consumer;
  */
 public class TierDisplay extends JavaPlugin implements Listener {
 
+    /** Best tier + kit a player can have. */
+    static final class TierInfo {
+        final String tier;
+        final String kit;
+
+        TierInfo(String tier, String kit) {
+            this.tier = tier;
+            this.kit = kit;
+        }
+    }
+
     /** Online players, kept by join/quit events so other threads never call Bukkit for them. */
     private final Map<UUID, Player> online = new ConcurrentHashMap<UUID, Player>();
 
-    /** Latest best tier per online player (absent = unranked). Read by the placeholders. */
-    private final Map<UUID, String> tiers = new ConcurrentHashMap<UUID, String>();
+    /** Latest best tier/kit per online player (absent = unranked). Read by the placeholders. */
+    private final Map<UUID, TierInfo> infos = new ConcurrentHashMap<UUID, TierInfo>();
 
     /** Lower-case Minecraft name -> Discord ID, built from the website's leaderboard. */
     private volatile Map<String, String> idsByName = new HashMap<String, String>();
@@ -71,7 +82,7 @@ public class TierDisplay extends JavaPlugin implements Listener {
     private ScheduledExecutorService pool;
     private ScheduledFuture<?> refreshFuture;
 
-    private int maxPrefix;
+    private int maxAffix;
     private boolean folia;
     private Method playerGetScheduler;
     private Method entityRun;
@@ -83,7 +94,7 @@ public class TierDisplay extends JavaPlugin implements Listener {
     @Override
     public void onEnable() {
         saveDefaultConfig();
-        maxPrefix = detectMaxPrefix();
+        maxAffix = detectMaxAffix();
 
         if (!initFolia()) {
             getServer().getPluginManager().disablePlugin(this);
@@ -122,15 +133,15 @@ public class TierDisplay extends JavaPlugin implements Listener {
             }
         }
         online.clear();
-        tiers.clear();
+        infos.clear();
     }
 
     private void hookPlaceholders() {
         if (getServer().getPluginManager().getPlugin("PlaceholderAPI") == null) return;
         try {
             new TierExpansion(this).register();
-            getLogger().info("Registered PlaceholderAPI placeholders: %tierdisplay_tier%, "
-                    + "%tierdisplay_prefix%, %tierdisplay_prefix_legacy%");
+            getLogger().info("Registered PlaceholderAPI placeholders: %tierdisplay_tier%, %tierdisplay_kit%, "
+                    + "%tierdisplay_prefix[_legacy|_mm]%, %tierdisplay_suffix[_legacy|_mm]%");
         } catch (Throwable t) {
             getLogger().warning("Could not register PlaceholderAPI placeholders: " + t);
         }
@@ -153,22 +164,43 @@ public class TierDisplay extends JavaPlugin implements Listener {
 
     /** The player's best tier, or null if unranked / not fetched yet. */
     public String getTier(UUID id) {
-        return tiers.get(id);
+        TierInfo info = infos.get(id);
+        return info == null ? null : info.tier;
+    }
+
+    /** The kit that produced the player's best tier, or null. */
+    public String getKit(UUID id) {
+        TierInfo info = infos.get(id);
+        return info == null ? null : info.kit;
     }
 
     /** The formatted prefix with & colour codes (empty if nothing should be shown). */
-    public String rawPrefix(String tier) {
+    public String rawPrefix(String tier, String kit) {
         FileConfiguration cfg = getConfig();
         String format = tier == null
                 ? cfg.getString("unranked-format", "")
                 : cfg.getString("format", "&8[{color}{tier}&8] &r");
-        if (format == null || format.isEmpty()) return "";
+        return fill(format, tier, kit);
+    }
 
+    /** The formatted suffix with & colour codes (empty if nothing should be shown). */
+    public String rawSuffix(String tier, String kit) {
+        FileConfiguration cfg = getConfig();
+        String format = tier == null
+                ? cfg.getString("unranked-suffix-format", "")
+                : cfg.getString("suffix-format", " {color}{tier} &7{kit}");
+        return fill(format, tier, kit);
+    }
+
+    private String fill(String format, String tier, String kit) {
+        if (format == null || format.isEmpty()) return "";
+        FileConfiguration cfg = getConfig();
         String color = tier == null
                 ? "&f"
                 : cfg.getString("tier-colors." + tier.toUpperCase(), cfg.getString("tier-colors.default", "&f"));
-
-        return format.replace("{color}", color).replace("{tier}", tier == null ? "" : tier);
+        return format.replace("{color}", color)
+                .replace("{tier}", tier == null ? "" : tier)
+                .replace("{kit}", kit == null ? "" : kit);
     }
 
     // ------------------------------------------------------------------
@@ -186,7 +218,7 @@ public class TierDisplay extends JavaPlugin implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         Player p = event.getPlayer();
         online.remove(p.getUniqueId());
-        tiers.remove(p.getUniqueId());
+        infos.remove(p.getUniqueId());
         if (!folia) removeTeam(p); // Paper: main thread. On Folia the tab entry leaves with the player.
     }
 
@@ -205,11 +237,11 @@ public class TierDisplay extends JavaPlugin implements Listener {
                 boolean warned = false;
                 for (final Player p : list) {
                     try {
-                        final String tier = fetchTier(p.getName()); // null = unranked
+                        final TierInfo info = fetchTier(p.getName()); // null = unranked
                         runForPlayer(p, new Runnable() {
                             @Override
                             public void run() {
-                                if (online.containsKey(p.getUniqueId())) apply(p, tier);
+                                if (online.containsKey(p.getUniqueId())) apply(p, info);
                             }
                         });
                     } catch (Exception ex) {
@@ -224,8 +256,8 @@ public class TierDisplay extends JavaPlugin implements Listener {
         });
     }
 
-    /** Runs off the main thread. Returns the player's best tier, or null if unranked. */
-    private String fetchTier(String playerName) throws Exception {
+    /** Runs off the main thread. Returns the player's best tier + kit, or null if unranked. */
+    private TierInfo fetchTier(String playerName) throws Exception {
         ensureIndex(playerName);
 
         String id = idsByName.get(playerName.toLowerCase());
@@ -243,19 +275,29 @@ public class TierDisplay extends JavaPlugin implements Listener {
         JsonObject obj = root.getAsJsonObject();
         if (!obj.has("kits") || !obj.get("kits").isJsonArray()) return null;
 
-        String best = null;
+        String bestTier = null;
+        String bestKit = null;
         int bestScore = Integer.MAX_VALUE;
         for (JsonElement el : obj.getAsJsonArray("kits")) {
             if (!el.isJsonObject()) continue;
-            String t = str(el.getAsJsonObject(), "tier");
+            JsonObject kitObj = el.getAsJsonObject();
+            String t = str(kitObj, "tier");
             if (t == null) continue;
             int score = tierScore(t);
-            if (best == null || score < bestScore) {
-                best = t;
+            if (bestTier == null || score < bestScore) {
+                bestTier = t;
                 bestScore = score;
+                String label = str(kitObj, "label");
+                if (label == null) label = str(kitObj, "kit");
+                bestKit = label == null ? "" : capitalize(label);
             }
         }
-        return best;
+        return bestTier == null ? null : new TierInfo(bestTier, bestKit);
+    }
+
+    private static String capitalize(String s) {
+        if (s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
     /** Lower = better: HT1, LT1, HT2, LT2 ... LT5. Unknown formats sort last. */
@@ -412,41 +454,33 @@ public class TierDisplay extends JavaPlugin implements Listener {
     // Applying
     // ------------------------------------------------------------------
 
-    private String buildPrefix(String tier) {
-        return ChatColor.translateAlternateColorCodes('&', rawPrefix(tier));
-    }
-
     /** Must run on the player's thread (main thread on Paper, entity scheduler on Folia). */
-    private void apply(Player player, String tier) {
-        // Remember it for the placeholders, whatever display mode is used.
-        if (tier == null) tiers.remove(player.getUniqueId());
-        else tiers.put(player.getUniqueId(), tier);
+    private void apply(Player player, TierInfo info) {
+        String tier = info == null ? null : info.tier;
+        String kit = info == null ? null : info.kit;
 
-        if (!getConfig().getBoolean("direct-display", true)) {
+        // Remember it for the placeholders, whatever display mode is used.
+        if (info == null) infos.remove(player.getUniqueId());
+        else infos.put(player.getUniqueId(), info);
+
+        if (!getConfig().getBoolean("direct-display", false)) {
             // Placeholder-only mode: another plugin shows the tier, so don't touch names.
             if (!folia) removeTeam(player);
             return;
         }
 
-        String prefix = buildPrefix(tier);
+        String prefix = trimAffix(ChatColor.translateAlternateColorCodes('&', rawPrefix(tier, kit)));
+        String suffix = trimAffix(ChatColor.translateAlternateColorCodes('&', rawSuffix(tier, kit)));
 
         if (folia) {
-            String listName = prefix.isEmpty() ? null : prefix + player.getName();
-            player.setPlayerListName(listName);
+            boolean nothing = prefix.isEmpty() && suffix.isEmpty();
+            player.setPlayerListName(nothing ? null : prefix + player.getName() + suffix);
             return;
         }
 
-        if (prefix.isEmpty()) {
+        if (prefix.isEmpty() && suffix.isEmpty()) {
             removeTeam(player);
             return;
-        }
-
-        if (prefix.length() > maxPrefix) {
-            prefix = prefix.substring(0, maxPrefix);
-            // don't leave a dangling colour-code character at the end
-            if (prefix.endsWith(String.valueOf(ChatColor.COLOR_CHAR))) {
-                prefix = prefix.substring(0, prefix.length() - 1);
-            }
         }
 
         Scoreboard board = Bukkit.getScoreboardManager().getMainScoreboard();
@@ -455,7 +489,18 @@ public class TierDisplay extends JavaPlugin implements Listener {
         if (team == null) team = board.registerNewTeam(teamName);
 
         team.setPrefix(prefix);
+        team.setSuffix(suffix);
         if (!team.hasEntry(player.getName())) team.addEntry(player.getName());
+    }
+
+    private String trimAffix(String text) {
+        if (text.length() <= maxAffix) return text;
+        String cut = text.substring(0, maxAffix);
+        // don't leave a dangling colour-code character at the end
+        if (cut.endsWith(String.valueOf(ChatColor.COLOR_CHAR))) {
+            cut = cut.substring(0, cut.length() - 1);
+        }
+        return cut;
     }
 
     private void removeTeam(Player player) {
@@ -469,8 +514,8 @@ public class TierDisplay extends JavaPlugin implements Listener {
         return "td" + player.getUniqueId().toString().replace("-", "").substring(0, 14);
     }
 
-    /** Team prefixes are limited to 16 chars on 1.12 and below, 64 on 1.13+. */
-    private static int detectMaxPrefix() {
+    /** Team prefix/suffix are limited to 16 chars on 1.12 and below, 64 on 1.13+. */
+    private static int detectMaxAffix() {
         try {
             String v = Bukkit.getBukkitVersion().split("-")[0]; // e.g. 1.12.2 / 1.21.4 / 26.1
             String[] p = v.split("\\.");
