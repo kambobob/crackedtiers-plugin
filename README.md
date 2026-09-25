@@ -38,7 +38,7 @@ Minecraft	1.12 – 26.2
 Proxy	Velocity
 Backend	Paper, Folia
 
-Roadmap
+# Roadmap
  Finalize tier API integration/format
  Tab list rendering across supported versions
  Nametag overlay rendering
